@@ -1,0 +1,43 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+  .:
+    devDependencies:
+      turbo:
+        specifier: ^2.0.0
+        version: 2.0.0
+      prettier:
+        specifier: ^3.2.0
+        version: 3.2.0
+      typescript:
+        specifier: ^5.4.0
+        version: 5.4.0
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.0.0
+
+  apps/web:
+    dependencies:
+      next:
+        specifier: ^14.2.0
+        version: 14.2.0(react-dom@18.3.0)(react@18.3.0)
+      react:
+        specifier: ^18.3.0
+        version: 18.3.0
+      react-dom:
+        specifier: ^18.3.0
+        version: 18.3.0(react@18.3.0)
+      shared-types:
+        specifier: workspace:^
+        version: link:../../packages/shared-types
+      animation-engine:
+        specifier: workspace:^
+        version: link:../../packages/animation-engine
+
+  packages/shared-types: {}
+
+  packages/animation-engine: {}

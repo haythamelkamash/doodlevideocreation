@@ -1,0 +1,516 @@
+openapi: 3.1.0
+info:
+  title: Doodle Video Creator API
+  version: 1.0.0
+  description: |
+    Enterprise API for the Doodle Video Creator platform.
+    Supports whiteboard animation video creation, AI-assisted script generation,
+    multi-user collaboration, and video export.
+  contact:
+    name: API Support
+    email: api@doodlecreator.app
+  license:
+    name: Commercial
+
+servers:
+  - url: https://api.doodlecreator.app/api/v1
+    description: Production
+  - url: https://staging-api.doodlecreator.app/api/v1
+    description: Staging
+  - url: http://localhost:4000/api/v1
+    description: Local development
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        statusCode: { type: integer }
+        message: { type: string }
+        timestamp: { type: string, format: date-time }
+        path: { type: string }
+
+    PaginatedResponse:
+      type: object
+      properties:
+        data: { type: array, items: {} }
+        meta:
+          type: object
+          properties:
+            total: { type: integer }
+            page: { type: integer }
+            limit: { type: integer }
+            totalPages: { type: integer }
+
+    Project:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        thumbnailUrl: { type: string, nullable: true }
+        durationSeconds: { type: number }
+        isDraft: { type: boolean }
+        exportStatus: { type: string, enum: [idle, queued, processing, completed, failed] }
+        settings: { type: object }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    Scene:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        order: { type: integer }
+        title: { type: string }
+        durationSeconds: { type: number }
+        elements: { type: array, items: { type: object } }
+        audioTracks: { type: array, items: { type: object } }
+
+    ExportJob:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        format: { type: string, enum: [mp4, mov, webm, gif] }
+        quality: { type: string, enum: ['720p', '1080p', '4k'] }
+        status: { type: string, enum: [queued, processing, completed, failed] }
+        progress: { type: number, minimum: 0, maximum: 100 }
+        outputUrl: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time, nullable: true }
+
+    GeneratedScript:
+      type: object
+      properties:
+        title: { type: string }
+        script: { type: string }
+        voiceoverText: { type: string }
+        totalDuration: { type: number }
+        scenes:
+          type: array
+          items:
+            type: object
+            properties:
+              order: { type: integer }
+              title: { type: string }
+              description: { type: string }
+              duration: { type: number }
+              suggestedCharacters: { type: array, items: { type: string } }
+              suggestedAssets: { type: array, items: { type: string } }
+              animationSuggestions: { type: array, items: { type: string } }
+              voiceoverSegment: { type: string }
+
+paths:
+  # ── Auth ──────────────────────────────────────────────────────────────────────
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Email/password login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+            example:
+              email: user@example.com
+              password: SecurePassword123!
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              example:
+                data:
+                  accessToken: eyJhbGciOiJSUzI1NiJ9...
+                  refreshToken: eyJhbGciOiJSUzI1NiJ9...
+                  expiresIn: 3600
+                  user:
+                    id: 550e8400-e29b-41d4-a716-446655440000
+                    email: user@example.com
+                    name: John Doe
+                    role: editor
+                    plan: pro
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              example:
+                statusCode: 401
+                message: Invalid email or password
+
+  /auth/refresh:
+    post:
+      tags: [auth]
+      summary: Refresh access token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '200':
+          description: Token refreshed
+        '401':
+          description: Invalid refresh token
+
+  /auth/google:
+    get:
+      tags: [auth]
+      summary: Initiate Google OAuth2 login
+      security: []
+      responses:
+        '302':
+          description: Redirect to Google
+
+  /auth/microsoft:
+    get:
+      tags: [auth]
+      summary: Initiate Microsoft OAuth2 login
+      security: []
+      responses:
+        '302':
+          description: Redirect to Microsoft
+
+  # ── Projects ──────────────────────────────────────────────────────────────────
+
+  /projects:
+    get:
+      tags: [projects]
+      summary: List user's projects
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+        - name: isDraft
+          in: query
+          schema: { type: boolean }
+        - name: search
+          in: query
+          schema: { type: string }
+        - name: sortBy
+          in: query
+          schema: { type: string, enum: [createdAt, updatedAt, title], default: updatedAt }
+      responses:
+        '200':
+          description: Projects list
+          content:
+            application/json:
+              example:
+                data:
+                  - id: 550e8400-e29b-41d4-a716-446655440000
+                    title: Safety Training Video
+                    thumbnailUrl: https://cdn.doodlecreator.app/thumbs/abc.jpg
+                    durationSeconds: 180
+                    isDraft: false
+                    exportStatus: completed
+                    updatedAt: '2026-01-15T10:30:00Z'
+                meta:
+                  total: 42
+                  page: 1
+                  limit: 20
+                  totalPages: 3
+
+    post:
+      tags: [projects]
+      summary: Create a new project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string, minLength: 1, maxLength: 255 }
+                description: { type: string }
+                templateId: { type: string, format: uuid }
+                settings: { type: object }
+            example:
+              title: My Well Control Training Video
+              description: Training video for new drilling crew members
+              settings:
+                backgroundType: whiteboard
+                canvasWidth: 1920
+                canvasHeight: 1080
+      responses:
+        '201':
+          description: Project created
+          content:
+            application/json:
+              example:
+                data:
+                  id: 550e8400-e29b-41d4-a716-446655440000
+                  title: My Well Control Training Video
+                  isDraft: true
+                  scenes: []
+
+  /projects/{id}:
+    get:
+      tags: [projects]
+      summary: Get project with scenes
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Full project data
+        '404':
+          description: Project not found
+
+    put:
+      tags: [projects]
+      summary: Update project (full save)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Project'
+      responses:
+        '200':
+          description: Project updated
+
+    delete:
+      tags: [projects]
+      summary: Delete project
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204':
+          description: Deleted
+
+  /projects/{id}/duplicate:
+    post:
+      tags: [projects]
+      summary: Duplicate a project
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '201':
+          description: Duplicated project
+
+  # ── Export ────────────────────────────────────────────────────────────────────
+
+  /export:
+    post:
+      tags: [export]
+      summary: Queue a video export job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [projectId, format, quality]
+              properties:
+                projectId: { type: string, format: uuid }
+                format: { type: string, enum: [mp4, mov, webm, gif] }
+                quality: { type: string, enum: ['720p', '1080p', '4k'] }
+            example:
+              projectId: 550e8400-e29b-41d4-a716-446655440000
+              format: mp4
+              quality: '1080p'
+      responses:
+        '201':
+          description: Export job queued
+          content:
+            application/json:
+              example:
+                data:
+                  id: 660e8400-e29b-41d4-a716-446655440001
+                  status: queued
+                  progress: 0
+
+  /export/{jobId}:
+    get:
+      tags: [export]
+      summary: Get export job status
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Job status
+          content:
+            application/json:
+              example:
+                data:
+                  id: 660e8400-e29b-41d4-a716-446655440001
+                  status: processing
+                  progress: 65
+                  outputUrl: null
+
+  # ── AI APIs ───────────────────────────────────────────────────────────────────
+
+  /ai/script:
+    post:
+      tags: [ai]
+      summary: Generate video script with AI
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [topic, industry, audience, durationSeconds]
+              properties:
+                topic: { type: string }
+                industry: { type: string, enum: [business, education, healthcare, oil-gas, engineering, marketing] }
+                audience: { type: string }
+                durationSeconds: { type: integer, minimum: 30, maximum: 1800 }
+                tone: { type: string, enum: [professional, casual, educational, persuasive], default: professional }
+                language: { type: string, default: en }
+            example:
+              topic: How to detect and respond to a well kick during drilling operations
+              industry: oil-gas
+              audience: Offshore drilling crew, operator level
+              durationSeconds: 300
+              tone: professional
+      responses:
+        '200':
+          description: Generated script
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/GeneratedScript'
+
+  /ai/voiceover:
+    post:
+      tags: [ai]
+      summary: Generate AI voiceover audio
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text, provider, voice]
+              properties:
+                text: { type: string, maxLength: 4096 }
+                provider: { type: string, enum: [openai, elevenlabs, azure] }
+                voice: { type: string }
+                speed: { type: number, minimum: 0.5, maximum: 2.0, default: 1.0 }
+      responses:
+        '200':
+          description: Audio file URL
+          content:
+            application/json:
+              example:
+                data:
+                  audioUrl: https://cdn.doodlecreator.app/tts/generated-123.mp3
+                  durationSeconds: 45.3
+
+  /ai/image:
+    post:
+      tags: [ai]
+      summary: Generate AI doodle image
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prompt]
+              properties:
+                prompt: { type: string }
+                style: { type: string, enum: [whiteboard, minimal], default: whiteboard }
+      responses:
+        '200':
+          description: Generated image URL
+          content:
+            application/json:
+              example:
+                data:
+                  imageUrl: https://cdn.doodlecreator.app/ai-gen/img-456.png
+
+  # ── Oil & Gas ─────────────────────────────────────────────────────────────────
+
+  /oil-gas/modules:
+    get:
+      tags: [oil-gas]
+      summary: List available O&G training modules
+      security: []
+      responses:
+        '200':
+          description: Available training modules
+          content:
+            application/json:
+              example:
+                data:
+                  - id: oilgas-well-control
+                    title: Well Control Fundamentals
+                    scenarioType: well-control
+                    certificationLevel: operator
+                    regulatoryReferences: ['IADC WellCAP', 'IWCF Level 2/3', 'API RP 59']
+
+  /oil-gas/modules/{scenarioType}/script:
+    post:
+      tags: [oil-gas]
+      summary: Generate O&G training script
+      parameters:
+        - name: scenarioType
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [well-control, blowout-prevention, managed-pressure-drilling, drilling-operations, equipment-illustration, process-flow, safety-emergency-response, kick-detection, well-completion]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                audience: { type: string }
+                durationSeconds: { type: integer }
+                language: { type: string }
+                specificFocus: { type: string }
+            example:
+              audience: New hire drilling crew members
+              durationSeconds: 480
+              specificFocus: Hard shut-in vs soft shut-in debate and when to use each
+      responses:
+        '200':
+          description: Generated O&G training script

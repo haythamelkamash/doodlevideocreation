@@ -1,0 +1,44 @@
+# ── Base ──────────────────────────────────────────────────────────────────────
+FROM node:20-alpine AS base
+RUN apk add --no-cache libc6-compat ffmpeg
+WORKDIR /app
+RUN npm install -g pnpm@9
+
+# ── Dependencies ──────────────────────────────────────────────────────────────
+FROM base AS deps
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/api/package.json ./apps/api/
+COPY packages/shared-types/package.json ./packages/shared-types/
+RUN pnpm install --frozen-lockfile
+
+# ── Builder ───────────────────────────────────────────────────────────────────
+FROM deps AS builder
+COPY . .
+RUN pnpm --filter shared-types build
+RUN pnpm --filter api build
+
+# ── Development ───────────────────────────────────────────────────────────────
+FROM deps AS development
+COPY . .
+EXPOSE 4000
+CMD ["pnpm", "--filter", "api", "dev"]
+
+# ── Production ────────────────────────────────────────────────────────────────
+FROM base AS production
+ENV NODE_ENV=production
+WORKDIR /app
+
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nestjs
+
+COPY --from=builder --chown=nestjs:nodejs /app/apps/api/dist ./dist
+COPY --from=builder --chown=nestjs:nodejs /app/node_modules ./node_modules
+COPY --from=builder --chown=nestjs:nodejs /app/apps/api/package.json ./
+
+USER nestjs
+EXPOSE 4000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+  CMD wget -qO- http://localhost:4000/health || exit 1
+
+CMD ["node", "dist/main"]

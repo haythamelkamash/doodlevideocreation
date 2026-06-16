@@ -1,0 +1,172 @@
+version: '3.9'
+
+services:
+  # ── Application Services ─────────────────────────────────────────────────────
+  web:
+    build:
+      context: ../../
+      dockerfile: infrastructure/docker/Dockerfile.web
+      target: development
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../../apps/web:/app/apps/web
+      - ../../packages:/app/packages
+      - /app/apps/web/.next
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+      - NEXT_PUBLIC_API_URL=http://localhost:4000/api/v1
+      - NEXT_PUBLIC_WS_URL=ws://localhost:4000
+    depends_on:
+      - api
+    networks:
+      - doodle-net
+
+  api:
+    build:
+      context: ../../
+      dockerfile: infrastructure/docker/Dockerfile.api
+      target: development
+    ports:
+      - "4000:4000"
+    volumes:
+      - ../../apps/api:/app/apps/api
+      - ../../packages:/app/packages
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+      - PORT=4000
+      - DATABASE_URL=postgresql://doodle:doodle_pass@postgres:5432/doodle_db
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - JWT_SECRET=dev-secret-change-in-production
+      - JWT_EXPIRY=1h
+      - REFRESH_TOKEN_SECRET=dev-refresh-secret
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - S3_ASSETS_BUCKET=${S3_ASSETS_BUCKET:-doodle-assets-dev}
+      - S3_EXPORTS_BUCKET=${S3_EXPORTS_BUCKET:-doodle-exports-dev}
+      - CDN_DOMAIN=${CDN_DOMAIN:-localhost}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - ALLOWED_ORIGINS=http://localhost:3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - doodle-net
+
+  # ── Export Workers (separate scaling) ───────────────────────────────────────
+  export-worker:
+    build:
+      context: ../../
+      dockerfile: infrastructure/docker/Dockerfile.worker
+      target: development
+    volumes:
+      - ../../apps/api:/app/apps/api
+      - /tmp:/tmp
+    environment:
+      - NODE_ENV=development
+      - DATABASE_URL=postgresql://doodle:doodle_pass@postgres:5432/doodle_db
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - S3_EXPORTS_BUCKET=${S3_EXPORTS_BUCKET:-doodle-exports-dev}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - INTERNAL_APP_URL=http://web:3000
+    depends_on:
+      - api
+      - redis
+    networks:
+      - doodle-net
+
+  # ── Data Layer ───────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: doodle
+      POSTGRES_PASSWORD: doodle_pass
+      POSTGRES_DB: doodle_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U doodle -d doodle_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - doodle-net
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --save 60 1
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    networks:
+      - doodle-net
+
+  # ── Development Tools ────────────────────────────────────────────────────────
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    ports:
+      - "8081:8081"
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    depends_on:
+      - redis
+    networks:
+      - doodle-net
+    profiles: ["tools"]
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@doodle.dev
+      PGADMIN_DEFAULT_PASSWORD: admin
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    networks:
+      - doodle-net
+    profiles: ["tools"]
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    networks:
+      - doodle-net
+    profiles: ["tools"]
+
+volumes:
+  postgres_data:
+  redis_data:
+  pgadmin_data:
+
+networks:
+  doodle-net:
+    driver: bridge
